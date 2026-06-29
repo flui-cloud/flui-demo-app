@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flui · Live activity</title>
+    <style>
+      :root {
+        --bg: #0b0e14;
+        --panel: #131826;
+        --panel-2: #1b2236;
+        --line: #232c44;
+        --text: #e8edf7;
+        --muted: #8a97b4;
+        --accent: #5b8cff;
+        --accent-2: #38d39f;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: radial-gradient(1200px 600px at 70% -10%, #16203b 0%, var(--bg) 60%);
+        color: var(--text);
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 28px 56px; }
+      header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 28px; }
+      .brand { font-weight: 700; letter-spacing: .5px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent-2);
+        box-shadow: 0 0 0 0 rgba(56,211,159,.6); animation: pulse 2s infinite; display: inline-block; }
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(56,211,159,.55); }
+        70% { box-shadow: 0 0 0 9px rgba(56,211,159,0); }
+        100% { box-shadow: 0 0 0 0 rgba(56,211,159,0); }
+      }
+      .sub { color: var(--muted); font-size: 13px; }
+
+      .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 22px; }
+      @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+      .panel h2 { margin: 0 0 16px; font-size: 12px; text-transform: uppercase;
+        letter-spacing: 1.4px; color: var(--muted); font-weight: 600; }
+
+      /* counter */
+      .counter { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+      .count-num { font-size: 64px; font-weight: 800; line-height: 1;
+        font-variant-numeric: tabular-nums; letter-spacing: -1px;
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        -webkit-background-clip: text; background-clip: text; color: transparent; }
+      .count-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; }
+      .bump { animation: bump .45s ease; }
+      @keyframes bump { 0% { transform: scale(1); } 35% { transform: scale(1.08); } 100% { transform: scale(1); } }
+
+      /* bars */
+      .bars { position: relative; transition: height .5s ease; }
+      .bar { position: absolute; left: 0; right: 0; height: 38px; display: flex;
+        align-items: center; gap: 12px; transition: transform .6s cubic-bezier(.22,.61,.36,1); }
+      .bar .label { width: 130px; flex: none; color: var(--muted); font-size: 13px; text-align: right;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .bar .track { position: relative; flex: 1; height: 22px; background: var(--panel-2);
+        border-radius: 7px; overflow: hidden; }
+      .bar .fill { position: absolute; inset: 0 auto 0 0; width: 0;
+        border-radius: 7px; transition: width .6s cubic-bezier(.22,.61,.36,1); }
+      .bar .val { width: 52px; flex: none; font-variant-numeric: tabular-nums;
+        font-weight: 700; font-size: 13px; }
+
+      /* feed */
+      .feed { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow: hidden; }
+      .row { display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+        border-bottom: 1px solid var(--line); }
+      .row:last-child { border-bottom: 0; }
+      .pill { font-size: 11px; font-weight: 700; letter-spacing: .3px; padding: 3px 9px;
+        border-radius: 999px; white-space: nowrap; }
+      .actor { font-weight: 600; }
+      .target { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+      .spacer { flex: 1; }
+      .time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .enter { animation: slideIn .5s ease; }
+      @keyframes slideIn {
+        from { opacity: 0; transform: translateY(-10px); background: rgba(91,140,255,.14); }
+        to { opacity: 1; transform: translateY(0); background: transparent; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <span class="dot"></span>
+        <span class="brand">Flui · Live activity</span>
+        <span class="sub">Postgres → NATS → Redis → SSE — no refresh</span>
+      </header>
+
+      <div class="grid">
+        <section class="panel counter">
+          <div>
+            <div class="count-label">Total events</div>
+            <div class="count-num" id="count">0</div>
+          </div>
+          <div class="sub" id="conn">connecting…</div>
+        </section>
+
+        <section class="panel">
+          <h2>Top actions</h2>
+          <div class="bars" id="bars"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Activity feed</h2>
+          <ul class="feed" id="feed"></ul>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const FEED_LIMIT = 14;
+      const COLORS = {
+        delivered: '#38d39f',
+        in_transit: '#5b8cff',
+        out_for_delivery: '#c084fc',
+        picked_up: '#fbbf24',
+        failed: '#f87171',
+        returned: '#fb923c',
+      };
+      const PALETTE = ['#5b8cff', '#38d39f', '#c084fc', '#fbbf24', '#fb923c', '#f87171', '#22d3ee'];
+      const colorFor = (a) => {
+        if (COLORS[a]) return COLORS[a];
+        let h = 0;
+        for (const c of a) h = (h * 31 + c.codePointAt(0)) >>> 0;
+        return PALETTE[h % PALETTE.length];
+      };
+      const pretty = (a) => a.replaceAll('_', ' ');
+      const hhmmss = (iso) => new Date(iso).toLocaleTimeString([], { hour12: false });
+
+      const countEl = document.getElementById('count');
+      const barsEl = document.getElementById('bars');
+      const feedEl = document.getElementById('feed');
+      const connEl = document.getElementById('conn');
+
+      // animated counter
+      let shown = 0, target = 0, raf = null;
+      function setCount(n) {
+        target = n;
+        if (raf) return;
+        const step = () => {
+          const diff = target - shown;
+          if (Math.abs(diff) < 1) { shown = target; raf = null; }
+          else { shown += diff * 0.18; raf = requestAnimationFrame(step); }
+          countEl.textContent = Math.round(shown).toLocaleString();
+        };
+        raf = requestAnimationFrame(step);
+      }
+      function bumpCount() {
+        countEl.classList.remove('bump');
+        // restart the CSS animation: re-add the class after a frame
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => countEl.classList.add('bump')),
+        );
+      }
+
+      // bar-race chart
+      const ROW_H = 38;
+      const barNodes = new Map();
+      function renderBars(top) {
+        const max = Math.max(1, ...top.map((t) => t.count));
+        barsEl.style.height = top.length * ROW_H + 'px';
+        const seen = new Set();
+        top.forEach((t, rank) => {
+          seen.add(t.action);
+          let node = barNodes.get(t.action);
+          if (!node) {
+            node = document.createElement('div');
+            node.className = 'bar';
+            node.innerHTML =
+              '<div class="label"></div><div class="track"><div class="fill"></div></div><div class="val"></div>';
+            node.querySelector('.label').textContent = pretty(t.action);
+            node.querySelector('.fill').style.background = colorFor(t.action);
+            barsEl.appendChild(node);
+            barNodes.set(t.action, node);
+          }
+          node.style.transform = `translateY(${rank * ROW_H}px)`;
+          node.querySelector('.fill').style.width = (t.count / max) * 100 + '%';
+          node.querySelector('.val').textContent = t.count.toLocaleString();
+        });
+        for (const [action, node] of barNodes) {
+          if (!seen.has(action)) { node.remove(); barNodes.delete(action); }
+        }
+      }
+
+      function addRow(row, animate) {
+        const li = document.createElement('li');
+        li.className = 'row' + (animate ? ' enter' : '');
+        const color = colorFor(row.action);
+        li.innerHTML =
+          `<span class="pill" style="color:${color};background:${color}22">${pretty(row.action)}</span>` +
+          `<span class="actor"></span><span class="target"></span>` +
+          `<span class="spacer"></span><span class="time">${hhmmss(row.created_at)}</span>`;
+        li.querySelector('.actor').textContent = row.actor;
+        li.querySelector('.target').textContent = row.target;
+        feedEl.prepend(li);
+        while (feedEl.children.length > FEED_LIMIT) feedEl.lastChild.remove();
+      }
+
+      function onInit(state) {
+        setCount(state.total);
+        renderBars(state.top);
+        feedEl.innerHTML = '';
+        state.feed.forEach((r) => addRow(r, false));
+      }
+      function onUpdate(u) {
+        setCount(u.total);
+        bumpCount();
+        renderBars(u.top);
+        addRow(u.row, true);
+      }
+
+      const es = new EventSource('/sse');
+      es.addEventListener('init', (e) => { connEl.textContent = 'live'; onInit(JSON.parse(e.data)); });
+      es.addEventListener('update', (e) => onUpdate(JSON.parse(e.data)));
+      es.onerror = () => { connEl.textContent = 'reconnecting…'; };
+    </script>
+  </body>
+</html>

@@ -1,0 +1,280 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  flui.yaml — the deploy contract for this app
+#
+#  This is the artifact that matters. It is a Flui catalog manifest, validated
+#  against the published `@flui-cloud/spec` schema. `kind: CatalogApp` +
+#  `spec.type: composed` means: several components installed and torn down as ONE
+#  atomic application. Flui turns each component into a workload + Service and
+#  wires them together — you describe intent, not Kubernetes objects.
+#
+#  This file is also a worked reference for the composed spec; the comments below
+#  point out the parts that are the spec, not boilerplate.
+# ─────────────────────────────────────────────────────────────────────────────
+kind: CatalogApp
+apiVersion: flui/v1
+
+# metadata — the catalog card (how the app is listed, searched and rated).
+metadata:
+  id: flui-demo-activity
+  name: Flui Live Activity (demo)
+  description: >
+    A reference reactive app that demonstrates Flui's composed-install pattern.
+    A raw INSERT on Postgres flows through pg_notify -> NATS -> Redis -> SSE and
+    reaches the browser in ~1s with no refresh — all three components are
+    genuinely in the data path. Installing it provisions Postgres, Redis and NATS
+    together as a single application.
+  appKind: APPLICATION
+  category: demo
+  tags:
+    - demo
+    - reactive
+    - sse
+    - composed
+  license: MIT
+  version: '0.1.0'
+  maintainedAt: '2026-06-29'
+  links:
+    source: https://github.com/flui-cloud/flui-demo-app
+  ratings:
+    wow: 4
+    utility: 3
+    euFit: 5
+    community: 3
+
+spec:
+  # composed = a multi-component app. Each entry under `components` becomes its
+  # own workload; they share a lifecycle and an internal network.
+  type: composed
+
+  # Exposed ports (expose: true below) get a public hostname + TLS automatically.
+  domain:
+    auto: true
+    tls: true
+    userCustomizable: true
+
+  # Internal DNS zone. Every component is reachable from the others at a stable
+  # in-cluster host — referenced in env as {{components.<name>.host}}.
+  networking:
+    internal: demo.internal
+
+  components:
+    # ── Postgres — system of record (activity table + AFTER INSERT trigger) ──
+    - name: postgres
+      image:
+        registry: docker.io
+        repository: library/postgres
+        tag: '16-alpine'
+      ports:
+        - name: postgres
+          internal: 5432
+          expose: false # internal only — no public endpoint
+          protocol: tcp
+      # A volume + `persistence.scope: dedicated` makes this a stateful workload
+      # pinned for durable storage (databases, brokers).
+      volumes:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+          required: true
+          size: 5Gi
+      persistence:
+        scope: dedicated
+      env:
+        - name: POSTGRES_DB
+          value: '{{app.id}}' # install-time template: the app's slug
+        - name: POSTGRES_USER
+          value: '{{app.id}}'
+        # valueFrom.generate: Flui generates a random secret, stores it in a
+        # Kubernetes Secret, and never writes the plaintext into the manifest.
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            generate: secret
+            length: 32
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+      # resources feed the capacity gate (the install is admitted only if it fits).
+      resources:
+        requests: { cpu: 250m, memory: 256Mi }
+        limits: { cpu: '2', memory: 2Gi }
+      # scaling: HPA (horizontal) and/or VPA (vertical). Off here — one stateful pod.
+      scaling:
+        horizontal: { enabled: false }
+        vertical:
+          enabled: true
+          mode: Recreate
+          bounds:
+            cpu: { min: 250m, max: '4' }
+            memory: { min: 256Mi, max: 8Gi }
+          updatePolicy:
+            trigger: [OOMKilled, CPUThrottling]
+            cooldown: 10m
+      # healthcheck: exec | http | tcp. Gates readiness before dependents start.
+      healthcheck:
+        type: exec
+        command: [pg_isready, -U, '{{env.POSTGRES_USER}}'] # {{env.X}} = this component's own env
+        initialDelay: 10s
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+    # ── Redis — hot feed + counter + top-action aggregates ──
+    - name: redis
+      image:
+        registry: docker.io
+        repository: library/redis
+        tag: '8-alpine'
+      ports:
+        - name: redis
+          internal: 6379
+          expose: false
+          protocol: tcp
+      volumes:
+        - name: data
+          mountPath: /data
+          required: true
+          size: 1Gi
+      persistence:
+        scope: dedicated
+      env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            generate: secret
+            length: 32
+      # startCommand overrides the image entrypoint; the generated secret is read
+      # from the container env at runtime (never baked into the manifest).
+      startCommand: exec redis-server --requirepass "$REDIS_PASSWORD"
+      resources:
+        requests: { cpu: 100m, memory: 64Mi }
+        limits: { cpu: '1', memory: 512Mi }
+      scaling:
+        horizontal: { enabled: false }
+        vertical:
+          enabled: true
+          mode: Recreate
+          bounds:
+            cpu: { min: 100m, max: '2' }
+            memory: { min: 64Mi, max: 2Gi }
+          updatePolicy:
+            trigger: [OOMKilled, CPUThrottling]
+            cooldown: 10m
+      healthcheck:
+        type: exec
+        command: [redis-cli, ping]
+        initialDelay: 5s
+        interval: 10s
+        timeout: 3s
+        retries: 5
+
+    # ── NATS — carries feed.new from the pg relay to the consumer ──
+    - name: nats
+      image:
+        registry: docker.io
+        repository: library/nats
+        tag: '2.10-alpine'
+      startCommand: 'nats-server --jetstream --store_dir=/data --http_port=8222'
+      ports:
+        - name: client
+          internal: 4222
+          expose: false
+          protocol: tcp
+        - name: monitoring
+          internal: 8222
+          expose: false
+          protocol: http
+      volumes:
+        - name: data
+          mountPath: /data
+          required: true
+          size: 1Gi
+      persistence:
+        scope: dedicated
+      env: []
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: '1', memory: 512Mi }
+      scaling:
+        horizontal: { enabled: false }
+        vertical:
+          enabled: true
+          mode: Recreate
+          bounds:
+            cpu: { min: 50m, max: '2' }
+            memory: { min: 64Mi, max: 2Gi }
+          updatePolicy:
+            trigger: [OOMKilled, CPUThrottling]
+            cooldown: 10m
+      healthcheck:
+        type: http
+        path: /healthz
+        port: 8222
+        initialDelay: 5s
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+    # ── App — relay + consumer + SSE + static page (built from this repo) ──
+    - name: app
+      # dependsOn orders startup: the app starts after its three backends are ready.
+      dependsOn: [postgres, redis, nats]
+      image:
+        registry: ghcr.io
+        repository: flui-cloud/flui-demo-app
+        tag: '0.1.0'
+      ports:
+        - name: http
+          internal: 3000
+          expose: true # the only public component → gets the app's hostname + TLS
+          protocol: http
+      # The wiring. {{components.<name>.host}} resolves to the in-cluster address;
+      # {{components.<name>.env.<VAR>}} pulls another component's value — and when
+      # that value was generated (the DB/cache passwords), Flui injects it as a
+      # Secret reference, so credentials never appear in plaintext anywhere here.
+      env:
+        - name: NODE_ENV
+          value: production
+        - name: GENERATOR_ENABLED
+          value: 'true' # ambient traffic so the page is never static
+        - name: PGHOST
+          value: '{{components.postgres.host}}'
+        - name: PGPORT
+          value: '5432'
+        - name: PGUSER
+          value: '{{components.postgres.env.POSTGRES_USER}}'
+        - name: PGPASSWORD
+          value: '{{components.postgres.env.POSTGRES_PASSWORD}}'
+        - name: PGDATABASE
+          value: '{{components.postgres.env.POSTGRES_DB}}'
+        - name: REDIS_HOST
+          value: '{{components.redis.host}}'
+        - name: REDIS_PORT
+          value: '6379'
+        - name: REDIS_PASSWORD
+          value: '{{components.redis.env.REDIS_PASSWORD}}'
+        - name: NATS_HOST
+          value: '{{components.nats.host}}'
+        - name: NATS_PORT
+          value: '4222'
+      resources:
+        requests: { cpu: 100m, memory: 128Mi }
+        limits: { cpu: '1', memory: 256Mi }
+      scaling:
+        horizontal: { enabled: false }
+        vertical: { enabled: false }
+      healthcheck:
+        type: http
+        path: /health
+        port: 3000
+        initialDelay: 10s
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+  # No identity layer for a demo (the page is public). Other modes: native, oidc, proxy.
+  auth:
+    mode: none
+
+  # Post-install verification: the install is marked healthy only once this passes.
+  smokeTest:
+    type: http
+    path: /health
+    expectedStatus: 200
+    timeoutSeconds: 60
