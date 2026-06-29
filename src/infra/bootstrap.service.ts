@@ -47,7 +47,7 @@ export class BootstrapService implements OnApplicationBootstrap {
       `SELECT to_regclass('public.shipments') AS present`,
     );
     if (!present) {
-      this.log.log('loading Dymmi logistics schema + seed...');
+      this.log.log('loading logistics schema + seed...');
       await this.pg.exec(await this.sql('logistics.schema.sql'));
       await this.pg.exec(await this.sql('logistics.seed.sql'));
     }

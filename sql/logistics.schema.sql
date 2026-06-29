@@ -1,8 +1,7 @@
--- Benchmark schema: logistics — Italian parcel shipping / warehousing
--- Dialect: PostgreSQL 16. Fields, comments and ENUM tokens are English; seed DATA
--- is realistic Italian for identities (carrier/customer company names, VAT, cities
--- via it-faker) and plausible-inline for the rest. Tier A = ENUM/CHECK, FK graph,
--- COMMENTs, indexes.
+-- Sample schema: logistics — parcel shipping / warehousing (demo dataset).
+-- PostgreSQL 16. Fields, comments and ENUM tokens are English; seed data uses
+-- realistic Italian identities (carrier/customer company names, VAT, cities).
+-- ENUM/CHECK constraints, FK graph, COMMENTs and indexes included.
 
 -- =========================================================================
 --  ENUM types  — declared value vocabularies (Tier A)

@@ -1,5 +1,4 @@
--- Frozen Postgres seed for the logistics benchmark schema.
--- Generated from data.json (deterministic, it-faker seed). Do not edit by hand.
+-- Postgres seed for the logistics sample schema (deterministic). Do not edit by hand.
 BEGIN;
 
 -- warehouses (6)

@@ -1,4 +1,4 @@
--- Derive the initial activity feed from the reused Dymmi logistics dataset:
+-- Derive the initial activity feed from the bundled logistics sample dataset:
 -- every parcel tracking scan becomes one activity row
 --   actor  = the carrier that moved the parcel
 --   action = the scan type (picked_up, in_transit, delivered, ...)

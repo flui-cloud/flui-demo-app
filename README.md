@@ -82,7 +82,7 @@ INSERT activity ─▶ Postgres  (AFTER INSERT trigger → pg_notify 'feed')
 The relay, consumer, API and SSE endpoint live in one service ([`src/`](./src));
 the page is a single static HTML file with CSS-animated bars — no charting
 library, no frontend framework. The `activity` table is seeded on first boot
-from a reused [Dymmi *logistics*](./sql) dataset; an in-app generator then adds
+from a bundled [sample *logistics*](./sql) dataset; an in-app generator then adds
 rows continuously so the page stays alive.
 
 ## Install on Flui

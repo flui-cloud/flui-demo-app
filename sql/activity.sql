@@ -1,5 +1,5 @@
--- Activity feed: the system of record for the demo. Sits alongside the reused
--- Dymmi "logistics" schema; rows are derived from tracking_events on first boot
+-- Activity feed: the system of record for the demo. Sits alongside the bundled
+-- "logistics" sample schema; rows are derived from tracking_events on first boot
 -- (see activity.seed.sql) and appended live by the manual psql INSERT.
 
 CREATE TABLE IF NOT EXISTS activity (
