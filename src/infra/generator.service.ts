@@ -13,6 +13,9 @@ const CARRIERS = [
 const ACTIONS = [
   'picked_up', 'in_transit', 'out_for_delivery', 'delivered', 'failed', 'returned',
 ];
+// Above this an insert is worth a line of its own; below it, it is just work.
+const SLOW_INSERT_MS = 250;
+
 const pick = <T>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
 const trk = () => 'TRK-' + Math.floor(10000 + Math.random() * 89999);
 
@@ -66,9 +69,16 @@ export class GeneratorService implements OnModuleDestroy {
   }
 
   private async insertOne(): Promise<void> {
+    const startedAt = Date.now();
     await this.pg.query(
       'INSERT INTO activity (actor, action, target) VALUES ($1, $2, $3)',
       [pick(CARRIERS), pick(ACTIONS), trk()],
     );
+    // The successful insert is already reported at the far end of the chain,
+    // so only a genuinely slow one is worth a warning of its own.
+    const ms = Date.now() - startedAt;
+    if (ms > SLOW_INSERT_MS) {
+      this.log.warn(`insert took ${ms}ms — the database is under load`);
+    }
   }
 }

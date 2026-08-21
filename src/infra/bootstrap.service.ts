@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   OnApplicationBootstrap,
+  OnApplicationShutdown,
 } from '@nestjs/common';
 import { AppConfig, CONFIG } from '../config';
 import { FeedEvents } from '../feed/feed-events';
@@ -17,8 +18,12 @@ import { RedisStore } from './redis-store.service';
 const SQL_DIR = join(process.cwd(), 'sql');
 
 @Injectable()
-export class BootstrapService implements OnApplicationBootstrap {
+export class BootstrapService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
   private readonly log = new Logger(BootstrapService.name);
+  private relayed = 0;
+  private heartbeat?: NodeJS.Timeout;
 
   constructor(
     @Inject(CONFIG) private readonly cfg: AppConfig,
@@ -34,6 +39,7 @@ export class BootstrapService implements OnApplicationBootstrap {
     await this.rebuildProjection();
     this.startConsumer();
     await this.startRelay();
+    this.startHeartbeat();
     this.log.log('demo chain is live: pg LISTEN -> NATS -> Redis -> SSE');
     if (this.cfg.generator.enabled) this.generator.start();
   }
@@ -85,13 +91,42 @@ export class BootstrapService implements OnApplicationBootstrap {
     await this.redis.rebuild(await this.readState());
   }
 
+  // Logged at the end of the chain: a line here means the row was written,
+  // Postgres notified, NATS delivered, Redis updated and the browsers pushed
+  // to. Logging any earlier would only prove something was attempted.
   private startConsumer() {
     this.nats.subscribe<ActivityRow>(this.cfg.subject, (row) => {
+      const startedAt = Date.now();
       void this.redis
         .applyEvent(normalize(row))
-        .then((update) => this.events.emit(update))
+        .then((update) => {
+          this.events.emit(update);
+          this.relayed += 1;
+          const watchers = this.events.watchers;
+          this.log.log(
+            `#${row.id} ${row.actor} ${row.action} ${row.target} ` +
+              `— relayed in ${Date.now() - startedAt}ms to ${watchers} watching`,
+          );
+        })
         .catch((e) => this.log.error(`consumer: ${(e as Error).message}`));
     });
+  }
+
+  // One line a minute regardless of traffic, so liveness can be checked by
+  // grep without reading through every per-event line.
+  private startHeartbeat() {
+    this.heartbeat = setInterval(() => {
+      const relayed = this.relayed;
+      this.relayed = 0;
+      this.log.log(
+        `last minute: ${relayed} events through the chain, ${this.events.watchers} watching`,
+      );
+    }, 60_000);
+    this.heartbeat.unref?.();
+  }
+
+  onApplicationShutdown() {
+    if (this.heartbeat) clearInterval(this.heartbeat);
   }
 
   private async startRelay() {

@@ -16,7 +16,7 @@ export class FeedController {
     const init$ = from(this.redis.getState()).pipe(
       map((state) => ({ type: 'init', data: state }) as MessageEvent),
     );
-    const updates$ = this.events.stream.pipe(
+    const updates$ = this.events.watch().pipe(
       map((update) => ({ type: 'update', data: update }) as MessageEvent),
     );
     return concat(init$, updates$);
